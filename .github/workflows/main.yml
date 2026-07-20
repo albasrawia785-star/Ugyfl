@@ -1,0 +1,66 @@
+name: Build Android APK (Auto-Detect Zip Version)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+
+    - name: Find and Unzip Project File
+      run: |
+        # البحث عن أول ملف ينتهي بـ .zip في المستودع وفك ضغطه
+        ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+        
+        if [ -z "$ZIP_FILE" ]; then
+          echo "❌ خطأ: لم يتم العثور على أي ملف مضغوط (.zip) في المجلد الرئيسي للمستودع!"
+          exit 1
+        fi
+        
+        echo "Found zip file: $ZIP_FILE"
+        unzip "$ZIP_FILE" -d project_dir
+
+    - name: Clean, Fix Wrapper and Build APK
+      run: |
+        # 1. البحث عن المجلد الصحيح الذي يحتوي على ملف الإعدادات والـ gradle
+        BUILD_DIR=$(find project_dir -name "build.gradle*" -exec dirname {} \; | head -n 1)
+        cd "$BUILD_DIR"
+        
+        # 2. التخلص من أي ملفات wrapper قديمة وإعادة بنائها
+        echo "Cleaning old wrapper if exists..."
+        rm -rf gradle/wrapper/gradle-wrapper.jar
+        rm -f gradlew
+        rm -f gradlew.bat
+        
+        echo "Regenerating fresh and clean Gradle Wrapper..."
+        gradle wrapper
+        
+        # 3. إعطاء صلاحية التشغيل للملف الجديد وبدء تجميع الـ APK
+        echo "Starting APK Compilation..."
+        chmod +x gradlew
+        ./gradlew assembleDebug --no-daemon
+        
+        # 4. تجهيز مجلد المخرجات النهائي
+        mkdir -p $GITHUB_WORKSPACE/output
+        find . -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-stable-debug-apk
+        path: output/*.apk
